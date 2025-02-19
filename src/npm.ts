@@ -161,6 +161,12 @@ export async function getDependencyResolver(
 
   const resolutions = new Map<string, string>();
 
+  let observableVersionOverrides = {};
+  if (existsSync(join(root, "observableVersionOverrides.json"))) {
+    const projectPkgPath = join(root, "observableVersionOverrides.json");
+    observableVersionOverrides = JSON.parse(await readFile(projectPkgPath, "utf-8"));
+  }
+
   // If there are dependencies to resolve, load the package.json and use the semver
   // range there instead of the (stale) resolution that jsDelivr provides.
   if (dependencies.size > 0) {
@@ -173,7 +179,8 @@ export async function getDependencyResolver(
           ? "latest" // force Arquero, Mosaic & DuckDB-Wasm to use the (same) latest version of Arrow
           : name === "@uwdata/mosaic-core" && depName === "@duckdb/duckdb-wasm"
           ? DUCKDB_WASM_VERSION // force Mosaic to use the latest (stable) version of DuckDB-Wasm
-          : pkg.dependencies?.[depName] ??
+          : observableVersionOverrides?.[depName] ??
+            pkg.dependencies?.[depName] ??
             pkg.devDependencies?.[depName] ??
             pkg.peerDependencies?.[depName] ??
             void console.warn(yellow(`${depName} is an undeclared dependency of ${name}; resolving latest version`));
@@ -231,7 +238,17 @@ async function resolveNpmVersion(root: string, {name, range}: NpmSpecifier): Pro
   const cache = await getNpmVersionCache(root);
   const versions = cache.get(name);
   if (versions) for (const version of versions) if (!range || satisfies(version, range)) return version;
-  if (range === undefined) range = "latest";
+  if (range === undefined) {
+    range = "latest";
+
+    if (existsSync(join(root, "observableVersionOverrides.json"))) {
+      const projectPkgPath = join(root, "observableVersionOverrides.json");
+      const observableVersionOverrides = JSON.parse(await readFile(projectPkgPath, "utf-8"));
+      if (observableVersionOverrides[name]) {
+        range = observableVersionOverrides[name];
+      }
+    }
+  }
   const disttag = validRange(range) ? null : range;
   const href = `https://registry.npmjs.org/${name}${disttag ? `/${disttag}` : ""}`;
   let promise = npmVersionRequests.get(href);
@@ -267,8 +284,6 @@ export async function resolveNpmImport(root: string, specifier: string): Promise
       ? "dist/jquery-ui.js/+esm"
       : name === "deck.gl"
       ? "dist.min.js/+esm"
-      : name === "react-dom"
-      ? "client"
       : "+esm"
   } = parseNpmSpecifier(specifier);
   const version = await resolveNpmVersion(root, {name, range});
